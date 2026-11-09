@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clinic booking</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.5rem; }
+  label { display: block; margin: .75rem 0 .25rem; font-weight: 600; }
+  input { width: 100%; padding: .5rem; box-sizing: border-box; font-size: 1rem; }
+  button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; margin-top: .5rem; }
+  ul { list-style: none; padding: 0; }
+  li { display: flex; justify-content: space-between; align-items: center; border: 1px solid #ccc; padding: .5rem .75rem; margin: .4rem 0; border-radius: 6px; }
+  .taken { color: #888; }
+  #msg { margin-top: 1rem; padding: .75rem; border-radius: 6px; display: none; }
+  .ok { background: #e6f4ea; display: block !important; }
+  .bad { background: #fdecea; display: block !important; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #181818; color: #eee; }
+    li { border-color: #444; }
+    .ok { background: #1e3a28; } .bad { background: #4a2220; }
+  }
+</style>
+</head>
+<body>
+<h1>Book an appointment</h1>
+
+<label for="key">API key</label>
+<input id="key" type="password" autocomplete="off">
+<button id="load">Show available slots</button>
+
+<h2>Slots</h2>
+<ul id="slots"></ul>
+
+<h2>Your details</h2>
+<label for="name">Name</label>
+<input id="name">
+<label for="email">Email</label>
+<input id="email" type="email">
+<p id="chosen">No slot chosen.</p>
+<button id="book" disabled>Book slot</button>
+<div id="msg" role="status"></div>
+
+<script>
+let chosen = null;
+let pendingKey = null;
+const $ = (id) => document.getElementById(id);
+
+function headers(extra) {
+  return Object.assign({ "X-API-Key": $("key").value, "Content-Type": "application/json" }, extra || {});
+}
+function show(text, ok) {
+  const m = $("msg");
+  m.textContent = text;
+  m.className = ok ? "ok" : "bad";
+}
+
+async function loadSlots() {
+  const res = await fetch("/slots", { headers: headers() });
+  const data = await res.json();
+  if (!res.ok) { show(data.error, false); return; }
+  const list = $("slots");
+  list.replaceChildren();
+  data.slots.forEach((s) => {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = s.provider + ": " + new Date(s.start).toLocaleString();
+    li.appendChild(label);
+    if (s.available) {
+      const b = document.createElement("button");
+      b.textContent = "Choose";
+      b.onclick = () => {
+        chosen = s;
+        pendingKey = crypto.randomUUID();
+        $("chosen").textContent = "Chosen: " + label.textContent;
+        $("book").disabled = false;
+      };
+      li.appendChild(b);
+    } else {
+      li.classList.add("taken");
+      li.appendChild(document.createTextNode("Booked"));
+    }
+    list.appendChild(li);
+  });
+}
+
+async function book() {
+  if (!chosen) return;
+  $("book").disabled = true;
+  const res = await fetch("/bookings", {
+    method: "POST",
+    headers: headers({ "Idempotency-Key": pendingKey }),
+    body: JSON.stringify({ slot_id: chosen.id, name: $("name").value, email: $("email").value }),
+  });
+  const data = await res.json();
+  if (res.ok) {
+    show("Confirmed. Booking id " + data.id + " for " + data.name + " (" + data.status + ").", true);
+    chosen = null;
+    $("chosen").textContent = "No slot chosen.";
+    loadSlots();
+  } else {
+    const wait = res.headers.get("Retry-After");
+    show(data.error + (wait ? " Try again in " + wait + " seconds." : ""), false);
+    $("book").disabled = false;
+    pendingKey = crypto.randomUUID();
+  }
+}
+
+$("load").onclick = loadSlots;
+$("book").onclick = book;
+</script>
+</body>
+</html>
